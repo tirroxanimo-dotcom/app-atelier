@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gabi Rometal">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<title>Gabi Rometal — Control</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#0a0e1a;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    user-select:none; -webkit-user-select:none; }
+  #bg { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:0; }
+
+  #glows, #cerlayer { position:fixed; inset:0; z-index:1; pointer-events:none; }
+  .geam { position:absolute; border-radius:3px;
+    background:radial-gradient(ellipse at center, rgba(255,201,112,0.95), rgba(255,170,60,0.4) 55%, rgba(255,160,50,0) 100%);
+    filter:blur(4px); opacity:0; transition:opacity .45s ease; mix-blend-mode:screen; }
+  .geam.on { opacity:1; }
+  .lampa { position:absolute; border-radius:50%; transform:translate(-50%,-50%);
+    background:radial-gradient(circle at center, rgba(255,214,135,0.92), rgba(255,178,72,0.38) 45%, rgba(255,160,50,0) 75%);
+    filter:blur(6px); opacity:0; transition:opacity .45s ease; mix-blend-mode:screen; }
+  .lampa.on { opacity:1; }
+  /* glow difuz pe cer — taiat pe silueta cladirii (apare doar de la acoperis in sus) */
+  .cer { position:absolute; border-radius:50%; transform:translate(-50%,-50%);
+    background:radial-gradient(ellipse at center, rgba(255,196,120,0.55), rgba(255,172,80,0.22) 42%, rgba(255,160,60,0) 70%);
+    filter:blur(26px); opacity:0; transition:opacity .6s ease; mix-blend-mode:screen; }
+  .cer.on { opacity:1; }
+
+  #sus { position:fixed; z-index:3; top:calc(5vh + env(safe-area-inset-top));
+    left:50%; transform:translateX(-50%); width:min(92%,430px);
+    display:grid; grid-template-columns:1fr 1fr; gap:11px 11px; }
+  .pill { width:100%; background:transparent; border:1.5px solid rgba(255,255,255,0.4); border-radius:999px;
+    color:rgba(255,255,255,0.75); padding:10px 6px; font-size:clamp(10.5px,3.1vw,13px); font-weight:600; letter-spacing:0.3px; touch-action:manipulation;
+    white-space:nowrap; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8); cursor:pointer;
+    transition:border-color .35s ease, color .35s ease, box-shadow .35s ease, text-shadow .35s ease; }
+  .pill:active { transform:scale(0.96); }
+  .pill.on { border-color:#ffcf6b; color:#ffcf6b;
+    box-shadow:0 0 20px rgba(255,179,71,0.55), inset 0 0 14px rgba(255,179,71,0.18);
+    text-shadow:0 0 14px rgba(255,179,71,0.95); }
+
+  #porti { position:fixed; inset:0; z-index:3; pointer-events:none; }
+  .poarta { position:absolute; width:26px; height:26px; border-radius:50%;
+    transform:translate(-50%,-50%); cursor:pointer; pointer-events:auto;
+    border:2px solid rgba(255,255,255,0.6); background:rgba(0,0,0,0.3);
+    backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
+    transition:border-color .35s ease, background .35s ease, box-shadow .35s ease; touch-action:manipulation; }
+  .poarta::before { content:""; position:absolute; inset:-11px; border-radius:50%; }
+  .poarta::after { content:""; position:absolute; inset:0; margin:auto; width:4px; height:4px;
+    border-radius:50%; background:rgba(255,255,255,0.55); transition:background .35s ease, box-shadow .35s ease; }
+  .poarta:active { transform:translate(-50%,-50%) scale(0.9); }
+  .poarta.on { border-color:#ffd27a; background:rgba(255,180,70,0.42);
+    box-shadow:0 0 20px 4px rgba(255,179,71,0.85); }
+  .poarta.on::after { background:#fff; box-shadow:0 0 8px rgba(255,255,255,0.9); }
+
+  #mock { position:fixed; bottom:calc(3vh + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    z-index:4; font-size:10px; letter-spacing:1px; color:rgba(255,255,255,0.5);
+    background:rgba(0,0,0,0.35); padding:4px 10px; border-radius:20px; backdrop-filter:blur(4px); }
+</style>
+</head>
+<body>
+  <img id="bg" src="background.jpg" alt="">
+  <div id="glows"></div>
+  <div id="cerlayer"></div>
+  <div id="porti"></div>
+  <div id="mock">MOD TEST — neconectat inca</div>
+  <div id="sus"></div>
+
+<script>
+  const LUMINI = [
+    { id:"iesire-spate", nume:"Lumina iesire spate" },
+    { id:"spate",        nume:"Lumina spate" },
+    { id:"fata",         nume:"Lumina fata" },
+    { id:"birou",        nume:"Lumina birou" },
+    { id:"stanga",       nume:"Lumina stanga atelier",  geamuri:"stanga" },
+    { id:"dreapta",      nume:"Lumina dreapta atelier", geamuri:"dreapta" },
+  ];
+  const PORTI = [
+    { id:"poarta-mica", fx:0.713, fy:0.571 },
+    { id:"poarta-mare", fx:0.825, fy:0.571 },
+  ];
+  const GEAMURI = {
+    stanga: [ { fx:0.021, fy:0.497, fw:0.072, fh:0.036 } ],
+    dreapta:[ { fx:0.223, fy:0.499, fw:0.042, fh:0.026 },
+              { fx:0.361, fy:0.499, fw:0.043, fh:0.027 } ],
+  };
+  const LAMPI = {
+    fata:  [ { fx:0.632, fy:0.472, r:0.055 } ],
+    birou: [ { fx:0.020, fy:0.605, r:0.130 } ],
+  };
+  const CER = {
+    "iesire-spate": [ { fx:0.12, fy:0.40, rx:0.26, ry:0.15 } ],
+    spate:          [ { fx:0.50, fy:0.40, rx:0.26, ry:0.15 } ],
+  };
+  // SILUETA de sus a cladirii/pomilor (fractii). Glow-ul de cer apare doar DEASUPRA ei.
+  const SILUETA = [
+    {fx:0.00,fy:0.460},{fx:0.07,fy:0.423},{fx:0.20,fy:0.436},{fx:0.42,fy:0.455},
+    {fx:0.60,fy:0.452},{fx:0.64,fy:0.433},{fx:0.75,fy:0.400},{fx:0.88,fy:0.423},{fx:1.00,fy:0.445}
+  ];
+
+  const bg=document.getElementById("bg"), glows=document.getElementById("glows");
+  const cerlayer=document.getElementById("cerlayer");
+  const portiL=document.getElementById("porti"), sus=document.getElementById("sus");
+  const stare={}, geamEls={}, lampaEls={}, cerEls={}, poartaEls={};
+
+  Object.keys(GEAMURI).forEach(g=>{ geamEls[g]=GEAMURI[g].map(()=>{ const el=document.createElement("div"); el.className="geam"; glows.appendChild(el); return el; }); });
+  Object.keys(LAMPI).forEach(g=>{ lampaEls[g]=LAMPI[g].map(()=>{ const el=document.createElement("div"); el.className="lampa"; glows.appendChild(el); return el; }); });
+  Object.keys(CER).forEach(g=>{ cerEls[g]=CER[g].map(()=>{ const el=document.createElement("div"); el.className="cer"; cerlayer.appendChild(el); return el; }); });
+
+  PORTI.forEach(p=>{
+    stare[p.id]=false;
+    const el=document.createElement("div"); el.className="poarta";
+    el.addEventListener("click", ()=>{ stare[p.id]=!stare[p.id]; el.classList.toggle("on", stare[p.id]); if(navigator.vibrate) navigator.vibrate(15); });
+    portiL.appendChild(el); poartaEls[p.id]=el;
+  });
+
+  function aseaza(){
+    const natW=bg.naturalWidth, natH=bg.naturalHeight; if(!natW) return;
+    const bw=window.innerWidth, bh=window.innerHeight;
+    const scale=Math.max(bw/natW, bh/natH), dw=natW*scale, dh=natH*scale;
+    const ox=(bw-dw)/2, oy=(bh-dh)/2;
+    const X=fx=>(ox+fx*dw), Y=fy=>(oy+fy*dh);
+    Object.keys(GEAMURI).forEach(g=>{ GEAMURI[g].forEach((w,i)=>{ const el=geamEls[g][i];
+      el.style.left=X(w.fx)+"px"; el.style.top=Y(w.fy)+"px"; el.style.width=(w.fw*dw)+"px"; el.style.height=(w.fh*dh)+"px"; }); });
+    Object.keys(LAMPI).forEach(g=>{ LAMPI[g].forEach((w,i)=>{ const el=lampaEls[g][i]; const d=2*w.r*dw;
+      el.style.left=X(w.fx)+"px"; el.style.top=Y(w.fy)+"px"; el.style.width=d+"px"; el.style.height=d+"px"; }); });
+    Object.keys(CER).forEach(g=>{ CER[g].forEach((w,i)=>{ const el=cerEls[g][i];
+      el.style.left=X(w.fx)+"px"; el.style.top=Y(w.fy)+"px"; el.style.width=(2*w.rx*dw)+"px"; el.style.height=(2*w.ry*dw)+"px"; }); });
+    PORTI.forEach(p=>{ const el=poartaEls[p.id]; el.style.left=X(p.fx)+"px"; el.style.top=Y(p.fy)+"px"; });
+    // clip pe silueta: pastreaza doar zona de deasupra conturului
+    let pts=["0px 0px", bw+"px 0px"];
+    for(let i=SILUETA.length-1;i>=0;i--){ pts.push(X(SILUETA[i].fx).toFixed(1)+"px "+Y(SILUETA[i].fy).toFixed(1)+"px"); }
+    cerlayer.style.clipPath="polygon("+pts.join(", ")+")";
+    cerlayer.style.webkitClipPath=cerlayer.style.clipPath;
+  }
+  bg.addEventListener("load", aseaza);
+  window.addEventListener("resize", aseaza);
+  window.addEventListener("orientationchange", ()=>setTimeout(aseaza,200));
+  if(window.visualViewport) window.visualViewport.addEventListener("resize", aseaza);
+  if(bg.complete) aseaza();
+
+  LUMINI.forEach(b=>{
+    stare[b.id]=false;
+    const el=document.createElement("button"); el.className="pill"; el.textContent=b.nume;
+    el.addEventListener("click", ()=>{
+      stare[b.id]=!stare[b.id]; el.classList.toggle("on", stare[b.id]);
+      if(b.geamuri && geamEls[b.geamuri]) geamEls[b.geamuri].forEach(g=>g.classList.toggle("on", stare[b.id]));
+      if(lampaEls[b.id]) lampaEls[b.id].forEach(g=>g.classList.toggle("on", stare[b.id]));
+      if(cerEls[b.id]) cerEls[b.id].forEach(g=>g.classList.toggle("on", stare[b.id]));
+      if(navigator.vibrate) navigator.vibrate(15);
+    });
+    sus.appendChild(el);
+  });
+
+  if("serviceWorker" in navigator)
+    window.addEventListener("load", ()=>navigator.serviceWorker.register("service-worker.js").catch(()=>{}));
+</script>
+</body>
+</html>
