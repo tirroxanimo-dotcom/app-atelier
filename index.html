@@ -26,7 +26,6 @@
     background:radial-gradient(circle at center, rgba(255,214,135,0.92), rgba(255,178,72,0.38) 45%, rgba(255,160,50,0) 75%);
     filter:blur(6px); opacity:0; transition:opacity .45s ease; mix-blend-mode:screen; }
   .lampa.on { opacity:1; }
-  /* glow difuz pe cer — taiat pe silueta cladirii (apare doar de la acoperis in sus) */
   .cer { position:absolute; border-radius:50%; transform:translate(-50%,-50%);
     background:radial-gradient(ellipse at center, rgba(255,196,120,0.55), rgba(255,172,80,0.22) 42%, rgba(255,160,60,0) 70%);
     filter:blur(26px); opacity:0; transition:opacity .6s ease; mix-blend-mode:screen; }
@@ -58,9 +57,28 @@
     box-shadow:0 0 20px 4px rgba(255,179,71,0.85); }
   .poarta.on::after { background:#fff; box-shadow:0 0 8px rgba(255,255,255,0.9); }
 
-  #mock { position:fixed; bottom:calc(3vh + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
-    z-index:4; font-size:10px; letter-spacing:1px; color:rgba(255,255,255,0.5);
-    background:rgba(0,0,0,0.35); padding:4px 10px; border-radius:20px; backdrop-filter:blur(4px); }
+  /* bara de stare conexiune (jos) */
+  #status { position:fixed; bottom:calc(3vh + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    z-index:4; font-size:11px; letter-spacing:0.5px; color:rgba(255,255,255,0.75);
+    background:rgba(0,0,0,0.4); padding:5px 14px; border-radius:20px; backdrop-filter:blur(4px);
+    display:flex; align-items:center; gap:7px; cursor:pointer; }
+  #status .dot { width:8px; height:8px; border-radius:50%; background:#888; transition:background .3s; }
+  #status.ok  .dot { background:#41d16b; box-shadow:0 0 8px #41d16b; }
+  #status.bad .dot { background:#e0564e; box-shadow:0 0 8px #e0564e; }
+  #status.wait .dot { background:#e8b84b; box-shadow:0 0 8px #e8b84b; }
+
+  /* ecran parola */
+  #login { position:fixed; inset:0; z-index:10; background:rgba(8,11,20,0.92);
+    backdrop-filter:blur(8px); display:none; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; }
+  #login.show { display:flex; }
+  #login h2 { color:#fff; font-size:18px; font-weight:600; }
+  #login p { color:rgba(255,255,255,0.6); font-size:13px; text-align:center; max-width:300px; line-height:1.5; }
+  #login input { width:min(90%,300px); padding:14px 16px; border-radius:12px; border:1.5px solid rgba(255,255,255,0.25);
+    background:rgba(255,255,255,0.08); color:#fff; font-size:16px; text-align:center; }
+  #login input:focus { outline:none; border-color:#ffcf6b; }
+  #login button { width:min(90%,300px); padding:14px; border-radius:12px; border:none; cursor:pointer;
+    background:#ffb347; color:#1a1205; font-size:16px; font-weight:700; }
+  #login .err { color:#ff8a80; font-size:13px; min-height:16px; }
 </style>
 </head>
 <body>
@@ -68,10 +86,35 @@
   <div id="glows"></div>
   <div id="cerlayer"></div>
   <div id="porti"></div>
-  <div id="mock">MOD TEST — neconectat inca</div>
+  <div id="status" class="wait"><span class="dot"></span><span id="statusText">Conectare…</span></div>
   <div id="sus"></div>
 
+  <div id="login">
+    <h2>Gabi Rometal — Control</h2>
+    <p>Introdu parola pentru a controla luminile. Se salveaza pe acest telefon, nu o mai ceri data viitoare.</p>
+    <input id="pass" type="password" placeholder="Parola" autocomplete="current-password">
+    <div class="err" id="loginErr"></div>
+    <button id="loginBtn">Conecteaza</button>
+  </div>
+
+<!-- biblioteca MQTT -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
 <script>
+  // ============================================================
+  //  CONFIG BROKER (EMQX)  —  parola NU e aici (o ceri la login)
+  // ============================================================
+  const MQTT = {
+    host: "x66f6e36.ala.eu-central-1.emqxsl.com",
+    port: 8084,            // WebSocket over TLS
+    path: "/mqtt",
+    username: "gabi",
+  };
+  // Topic-uri: comanda -> gabi/<id>/set ("on"/"off" sau "open"/"close")
+  //            stare   -> gabi/<id>/state (retained)
+  // (cand legam Shelly-ul, aici aliniem topicurile la ale lui)
+  const T_SET   = id => "gabi/" + id + "/set";
+  const T_STATE = id => "gabi/" + id + "/state";
+
   const LUMINI = [
     { id:"iesire-spate", nume:"Lumina iesire spate" },
     { id:"spate",        nume:"Lumina spate" },
@@ -97,7 +140,6 @@
     "iesire-spate": [ { fx:0.12, fy:0.40, rx:0.26, ry:0.15 } ],
     spate:          [ { fx:0.50, fy:0.40, rx:0.26, ry:0.15 } ],
   };
-  // SILUETA de sus a cladirii/pomilor (fractii). Glow-ul de cer apare doar DEASUPRA ei.
   const SILUETA = [
     {fx:0.00,fy:0.460},{fx:0.07,fy:0.423},{fx:0.20,fy:0.436},{fx:0.42,fy:0.455},
     {fx:0.60,fy:0.452},{fx:0.64,fy:0.433},{fx:0.75,fy:0.400},{fx:0.88,fy:0.423},{fx:1.00,fy:0.445}
@@ -106,19 +148,47 @@
   const bg=document.getElementById("bg"), glows=document.getElementById("glows");
   const cerlayer=document.getElementById("cerlayer");
   const portiL=document.getElementById("porti"), sus=document.getElementById("sus");
-  const stare={}, geamEls={}, lampaEls={}, cerEls={}, poartaEls={};
+  const stare={}, geamEls={}, lampaEls={}, cerEls={}, poartaEls={}, pillEls={};
 
   Object.keys(GEAMURI).forEach(g=>{ geamEls[g]=GEAMURI[g].map(()=>{ const el=document.createElement("div"); el.className="geam"; glows.appendChild(el); return el; }); });
   Object.keys(LAMPI).forEach(g=>{ lampaEls[g]=LAMPI[g].map(()=>{ const el=document.createElement("div"); el.className="lampa"; glows.appendChild(el); return el; }); });
   Object.keys(CER).forEach(g=>{ cerEls[g]=CER[g].map(()=>{ const el=document.createElement("div"); el.className="cer"; cerlayer.appendChild(el); return el; }); });
 
+  // ---- construieste butoanele ----
+  LUMINI.forEach(b=>{
+    stare[b.id]=false;
+    const el=document.createElement("button"); el.className="pill"; el.textContent=b.nume;
+    el.addEventListener("click", ()=>comanda(b.id, !stare[b.id]));
+    sus.appendChild(el); pillEls[b.id]=el;
+  });
   PORTI.forEach(p=>{
     stare[p.id]=false;
     const el=document.createElement("div"); el.className="poarta";
-    el.addEventListener("click", ()=>{ stare[p.id]=!stare[p.id]; el.classList.toggle("on", stare[p.id]); if(navigator.vibrate) navigator.vibrate(15); });
+    el.addEventListener("click", ()=>comanda(p.id, !stare[p.id], true));
     portiL.appendChild(el); poartaEls[p.id]=el;
   });
 
+  // ---- aplica starea vizuala pentru un id ----
+  function aplica(id, on){
+    stare[id]=on;
+    if(pillEls[id]) pillEls[id].classList.toggle("on", on);
+    if(poartaEls[id]) poartaEls[id].classList.toggle("on", on);
+    if(geamEls[id]) geamEls[id].forEach(g=>g.classList.toggle("on", on));
+    if(lampaEls[id]) lampaEls[id].forEach(g=>g.classList.toggle("on", on));
+    if(cerEls[id]) cerEls[id].forEach(g=>g.classList.toggle("on", on));
+  }
+
+  // ---- la apasare: publica comanda + feedback vizual imediat ----
+  function comanda(id, on, poarta){
+    aplica(id, on);                       // feedback imediat
+    if(navigator.vibrate) navigator.vibrate(15);
+    if(client && client.connected){
+      const payload = poarta ? (on?"open":"close") : (on?"on":"off");
+      client.publish(T_SET(id), payload);
+    }
+  }
+
+  // ---- pozitionare ancorata de imagine ----
   function aseaza(){
     const natW=bg.naturalWidth, natH=bg.naturalHeight; if(!natW) return;
     const bw=window.innerWidth, bh=window.innerHeight;
@@ -132,7 +202,6 @@
     Object.keys(CER).forEach(g=>{ CER[g].forEach((w,i)=>{ const el=cerEls[g][i];
       el.style.left=X(w.fx)+"px"; el.style.top=Y(w.fy)+"px"; el.style.width=(2*w.rx*dw)+"px"; el.style.height=(2*w.ry*dw)+"px"; }); });
     PORTI.forEach(p=>{ const el=poartaEls[p.id]; el.style.left=X(p.fx)+"px"; el.style.top=Y(p.fy)+"px"; });
-    // clip pe silueta: pastreaza doar zona de deasupra conturului
     let pts=["0px 0px", bw+"px 0px"];
     for(let i=SILUETA.length-1;i>=0;i--){ pts.push(X(SILUETA[i].fx).toFixed(1)+"px "+Y(SILUETA[i].fy).toFixed(1)+"px"); }
     cerlayer.style.clipPath="polygon("+pts.join(", ")+")";
@@ -144,18 +213,104 @@
   if(window.visualViewport) window.visualViewport.addEventListener("resize", aseaza);
   if(bg.complete) aseaza();
 
-  LUMINI.forEach(b=>{
-    stare[b.id]=false;
-    const el=document.createElement("button"); el.className="pill"; el.textContent=b.nume;
-    el.addEventListener("click", ()=>{
-      stare[b.id]=!stare[b.id]; el.classList.toggle("on", stare[b.id]);
-      if(b.geamuri && geamEls[b.geamuri]) geamEls[b.geamuri].forEach(g=>g.classList.toggle("on", stare[b.id]));
-      if(lampaEls[b.id]) lampaEls[b.id].forEach(g=>g.classList.toggle("on", stare[b.id]));
-      if(cerEls[b.id]) cerEls[b.id].forEach(g=>g.classList.toggle("on", stare[b.id]));
-      if(navigator.vibrate) navigator.vibrate(15);
+  // ============================================================
+  //  MQTT
+  // ============================================================
+  const statusEl=document.getElementById("status"), statusText=document.getElementById("statusText");
+  const loginEl=document.getElementById("login"), passEl=document.getElementById("pass");
+  const loginErr=document.getElementById("loginErr"), loginBtn=document.getElementById("loginBtn");
+  let client=null, connectTimer=null;
+
+  function setStatus(cls, txt){ statusEl.className=cls; statusText.textContent=txt; }
+
+  function conecteaza(parola){
+    setStatus("wait","Conectare…");
+    const url = "wss://"+MQTT.host+":"+MQTT.port+MQTT.path;
+    const opts = {
+      username: MQTT.username,
+      password: parola,
+      clientId: "web_"+Math.random().toString(16).slice(2,10),
+      clean: true,
+      reconnectPeriod: 3000,
+      connectTimeout: 8000,
+      protocolVersion: 4,
+    };
+    try { client = mqtt.connect(url, opts); } catch(e){ setStatus("bad","Eroare"); return; }
+
+    // daca nu se conecteaza in 9s -> probabil parola gresita
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(()=>{
+      if(!client || !client.connected){
+        try{ client.end(true); }catch(e){}
+        localStorage.removeItem("mqtt_pass");
+        loginErr.textContent="Nu s-a conectat — verifica parola.";
+        loginEl.classList.add("show");
+        setStatus("bad","Deconectat");
+      }
+    }, 9000);
+
+    client.on("connect", ()=>{
+      clearTimeout(connectTimer);
+      setStatus("ok","Conectat");
+      loginEl.classList.remove("show");
+      // asculta starea tuturor butoanelor (retained)
+      [...LUMINI, ...PORTI].forEach(b=> client.subscribe(T_STATE(b.id)));
     });
-    sus.appendChild(el);
+
+    client.on("message", (topic, msg)=>{
+      const m = msg.toString().toLowerCase();
+      [...LUMINI, ...PORTI].forEach(b=>{
+        if(topic === T_STATE(b.id)){
+          const on = (m==="on" || m==="open" || m==="1" || m==="true");
+          aplica(b.id, on);
+        }
+      });
+    });
+
+    client.on("error", (err)=>{
+      const s=(err&&err.message||"").toLowerCase();
+      if(s.includes("not authorized") || s.includes("bad user") || s.includes("password") || s.includes("4") || s.includes("5")){
+        clearTimeout(connectTimer);
+        try{ client.end(true); }catch(e){}
+        localStorage.removeItem("mqtt_pass");
+        loginErr.textContent="Parola gresita.";
+        loginEl.classList.add("show");
+        setStatus("bad","Parola gresita");
+      } else {
+        setStatus("bad","Eroare retea");
+      }
+    });
+
+    client.on("reconnect", ()=> setStatus("wait","Reconectare…"));
+    client.on("close", ()=>{ if(statusEl.className!=="ok") setStatus("bad","Deconectat"); });
+    client.on("offline", ()=> setStatus("bad","Offline"));
+  }
+
+  // login
+  loginBtn.addEventListener("click", ()=>{
+    const p=passEl.value.trim(); if(!p) return;
+    loginErr.textContent="";
+    localStorage.setItem("mqtt_pass", p);
+    if(client){ try{ client.end(true); }catch(e){} client=null; }
+    conecteaza(p);
   });
+  passEl.addEventListener("keydown", e=>{ if(e.key==="Enter") loginBtn.click(); });
+
+  // apasare lunga pe bara de stare = sterge parola salvata (schimbare parola)
+  let pressTimer=null;
+  statusEl.addEventListener("pointerdown", ()=>{ pressTimer=setTimeout(()=>{
+    localStorage.removeItem("mqtt_pass");
+    if(client){ try{ client.end(true); }catch(e){} client=null; }
+    passEl.value=""; loginErr.textContent="Parola stearsa. Introdu din nou.";
+    loginEl.classList.add("show");
+  }, 1000); });
+  statusEl.addEventListener("pointerup", ()=> clearTimeout(pressTimer));
+  statusEl.addEventListener("pointerleave", ()=> clearTimeout(pressTimer));
+
+  // pornire: daca avem parola salvata, conecteaza; altfel cere-o
+  const saved = (function(){ try{ return localStorage.getItem("mqtt_pass"); }catch(e){ return null; } })();
+  if(saved) conecteaza(saved);
+  else { loginEl.classList.add("show"); setStatus("bad","Neconectat"); }
 
   if("serviceWorker" in navigator)
     window.addEventListener("load", ()=>navigator.serviceWorker.register("service-worker.js").catch(()=>{}));
