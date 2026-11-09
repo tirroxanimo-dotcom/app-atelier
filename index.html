@@ -42,6 +42,8 @@
   .pill.on { border-color:#ffcf6b; color:#ffcf6b;
     box-shadow:0 0 20px rgba(255,179,71,0.55), inset 0 0 14px rgba(255,179,71,0.18);
     text-shadow:0 0 14px rgba(255,179,71,0.95); }
+  /* lumina fara Shelly asignat inca — un punct mic sa stii care nu-s legate */
+  .pill.virtual::after { content:"·"; position:absolute; }
 
   #porti { position:fixed; inset:0; z-index:3; pointer-events:none; }
   .poarta { position:absolute; width:26px; height:26px; border-radius:50%;
@@ -67,16 +69,16 @@
   #status.bad .dot { background:#e0564e; box-shadow:0 0 8px #e0564e; }
   #status.wait .dot { background:#e8b84b; box-shadow:0 0 8px #e8b84b; }
 
-  /* ecran parola */
+  /* ecran token */
   #login { position:fixed; inset:0; z-index:10; background:rgba(8,11,20,0.92);
     backdrop-filter:blur(8px); display:none; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:24px; }
   #login.show { display:flex; }
   #login h2 { color:#fff; font-size:18px; font-weight:600; }
-  #login p { color:rgba(255,255,255,0.6); font-size:13px; text-align:center; max-width:300px; line-height:1.5; }
-  #login input { width:min(90%,300px); padding:14px 16px; border-radius:12px; border:1.5px solid rgba(255,255,255,0.25);
-    background:rgba(255,255,255,0.08); color:#fff; font-size:16px; text-align:center; }
+  #login p { color:rgba(255,255,255,0.6); font-size:13px; text-align:center; max-width:320px; line-height:1.5; }
+  #login input { width:min(90%,340px); padding:14px 16px; border-radius:12px; border:1.5px solid rgba(255,255,255,0.25);
+    background:rgba(255,255,255,0.08); color:#fff; font-size:14px; text-align:center; }
   #login input:focus { outline:none; border-color:#ffcf6b; }
-  #login button { width:min(90%,300px); padding:14px; border-radius:12px; border:none; cursor:pointer;
+  #login button { width:min(90%,340px); padding:14px; border-radius:12px; border:none; cursor:pointer;
     background:#ffb347; color:#1a1205; font-size:16px; font-weight:700; }
   #login .err { color:#ff8a80; font-size:13px; min-height:16px; }
 </style>
@@ -91,8 +93,8 @@
 
   <div id="login">
     <h2>Gabi Rometal — Control</h2>
-    <p>Introdu parola pentru a controla luminile. Se salveaza pe acest telefon, nu o mai ceri data viitoare.</p>
-    <input id="pass" type="password" placeholder="Parola" autocomplete="current-password">
+    <p>Lipeste token-ul flespi pentru a controla luminile. Se salveaza pe acest telefon, nu il mai ceri data viitoare.</p>
+    <input id="pass" type="password" placeholder="Token flespi" autocomplete="off" spellcheck="false">
     <div class="err" id="loginErr"></div>
     <button id="loginBtn">Conecteaza</button>
   </div>
@@ -101,22 +103,23 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
 <script>
   // ============================================================
-  //  CONFIG BROKER (EMQX)  —  parola NU e aici (o ceri la login)
+  //  CONFIG BROKER (flespi)  —  token-ul NU e aici (il ceri la login)
+  //  flespi: username = token, password gol. WSS pe 443.
   // ============================================================
   const MQTT = {
-    host: "x66f6e36.ala.eu-central-1.emqxsl.com",
-    port: 8084,            // WebSocket over TLS
-    path: "/mqtt",
-    username: "gabi",
+    host: "mqtt.flespi.io",
+    port: 443,
+    path: "",              // => wss://mqtt.flespi.io:443
   };
-  // Topic-uri: comanda -> gabi/<id>/set ("on"/"off" sau "open"/"close")
-  //            stare   -> gabi/<id>/state (retained)
-  // (cand legam Shelly-ul, aici aliniem topicurile la ale lui)
-  const T_SET   = id => "gabi/" + id + "/set";
-  const T_STATE = id => "gabi/" + id + "/state";
 
+  // ------------------------------------------------------------
+  //  DISPOZITIVE
+  //  Pune "shelly" (prefixul MQTT al unui Shelly) + "ch" (canalul, de obicei 0)
+  //  pe o lumina ca sa o legi la releu real. Fara "shelly" = buton doar vizual.
+  //  Ca sa adaugi un Shelly nou mai tarziu: completezi shelly+ch pe linia lui.
+  // ------------------------------------------------------------
   const LUMINI = [
-    { id:"iesire-spate", nume:"Lumina iesire spate" },
+    { id:"iesire-spate", nume:"Lumina iesire spate", shelly:"shelly1minig3-d885ac09bb60", ch:0 },
     { id:"spate",        nume:"Lumina spate" },
     { id:"fata",         nume:"Lumina fata" },
     { id:"birou",        nume:"Lumina birou" },
@@ -124,9 +127,18 @@
     { id:"dreapta",      nume:"Lumina dreapta atelier", geamuri:"dreapta" },
   ];
   const PORTI = [
+    // porti: fara Shelly inca -> doar vizuale. Cand pui un Shelly pe poarta,
+    // adaugi shelly+ch; pentru poarta probabil vei folosi "toggle" (vezi comanda()).
     { id:"poarta-mica", fx:0.713, fy:0.571 },
     { id:"poarta-mare", fx:0.825, fy:0.571 },
   ];
+
+  // Topicuri Shelly (Gen3, MQTT Control):
+  //   comanda -> <prefix>/command/switch:<ch>   payload "on"/"off" (sau "toggle")
+  //   stare   -> <prefix>/status/switch:<ch>    JSON cu { output: true/false }
+  const CMD = d => d.shelly + "/command/switch:" + (d.ch||0);
+  const ST  = d => d.shelly + "/status/switch:"  + (d.ch||0);
+
   const GEAMURI = {
     stanga: [ { fx:0.021, fy:0.497, fw:0.072, fh:0.036 } ],
     dreapta:[ { fx:0.223, fy:0.499, fw:0.042, fh:0.026 },
@@ -149,6 +161,8 @@
   const cerlayer=document.getElementById("cerlayer");
   const portiL=document.getElementById("porti"), sus=document.getElementById("sus");
   const stare={}, geamEls={}, lampaEls={}, cerEls={}, poartaEls={}, pillEls={};
+  const DEV={};  // lookup id -> dispozitiv
+  [...LUMINI, ...PORTI].forEach(d=> DEV[d.id]=d);
 
   Object.keys(GEAMURI).forEach(g=>{ geamEls[g]=GEAMURI[g].map(()=>{ const el=document.createElement("div"); el.className="geam"; glows.appendChild(el); return el; }); });
   Object.keys(LAMPI).forEach(g=>{ lampaEls[g]=LAMPI[g].map(()=>{ const el=document.createElement("div"); el.className="lampa"; glows.appendChild(el); return el; }); });
@@ -158,6 +172,7 @@
   LUMINI.forEach(b=>{
     stare[b.id]=false;
     const el=document.createElement("button"); el.className="pill"; el.textContent=b.nume;
+    if(!b.shelly) el.classList.add("virtual");   // lumina inca nelegata
     el.addEventListener("click", ()=>comanda(b.id, !stare[b.id]));
     sus.appendChild(el); pillEls[b.id]=el;
   });
@@ -182,10 +197,13 @@
   function comanda(id, on, poarta){
     aplica(id, on);                       // feedback imediat
     if(navigator.vibrate) navigator.vibrate(15);
-    if(client && client.connected){
-      const payload = poarta ? (on?"open":"close") : (on?"on":"off");
-      client.publish(T_SET(id), payload);
+    const d = DEV[id];
+    if(client && client.connected && d && d.shelly){
+      // porti: cand vei lega un Shelly, poate vrei "toggle" in loc de on/off.
+      const payload = on ? "on" : "off";
+      client.publish(CMD(d), payload);
     }
+    // fara Shelly (lumini nelegate inca / porti) -> doar vizual, nu publica
   }
 
   // ---- pozitionare ancorata de imagine ----
@@ -223,12 +241,12 @@
 
   function setStatus(cls, txt){ statusEl.className=cls; statusText.textContent=txt; }
 
-  function conecteaza(parola){
+  function conecteaza(token){
     setStatus("wait","Conectare…");
     const url = "wss://"+MQTT.host+":"+MQTT.port+MQTT.path;
     const opts = {
-      username: MQTT.username,
-      password: parola,
+      username: token,         // flespi: token = username
+      password: "",            // flespi: parola nefolosita
       clientId: "web_"+Math.random().toString(16).slice(2,10),
       clean: true,
       reconnectPeriod: 3000,
@@ -237,13 +255,13 @@
     };
     try { client = mqtt.connect(url, opts); } catch(e){ setStatus("bad","Eroare"); return; }
 
-    // daca nu se conecteaza in 9s -> probabil parola gresita
+    // daca nu se conecteaza in 9s -> probabil token gresit
     clearTimeout(connectTimer);
     connectTimer = setTimeout(()=>{
       if(!client || !client.connected){
         try{ client.end(true); }catch(e){}
-        localStorage.removeItem("mqtt_pass");
-        loginErr.textContent="Nu s-a conectat — verifica parola.";
+        localStorage.removeItem("flespi_token");
+        loginErr.textContent="Nu s-a conectat — verifica token-ul.";
         loginEl.classList.add("show");
         setStatus("bad","Deconectat");
       }
@@ -253,29 +271,36 @@
       clearTimeout(connectTimer);
       setStatus("ok","Conectat");
       loginEl.classList.remove("show");
-      // asculta starea tuturor butoanelor (retained)
-      [...LUMINI, ...PORTI].forEach(b=> client.subscribe(T_STATE(b.id)));
+      // asculta starea reala a luminilor legate la Shelly
+      [...LUMINI, ...PORTI].forEach(d=>{ if(d.shelly) client.subscribe(ST(d)); });
     });
 
     client.on("message", (topic, msg)=>{
-      const m = msg.toString().toLowerCase();
-      [...LUMINI, ...PORTI].forEach(b=>{
-        if(topic === T_STATE(b.id)){
-          const on = (m==="on" || m==="open" || m==="1" || m==="true");
-          aplica(b.id, on);
+      [...LUMINI, ...PORTI].forEach(d=>{
+        if(d.shelly && topic === ST(d)){
+          let on=false;
+          try {
+            const j = JSON.parse(msg.toString());      // Shelly trimite JSON
+            on = (j.output === true);
+          } catch(e){
+            const m = msg.toString().toLowerCase();    // fallback text simplu
+            on = (m==="on" || m==="true" || m==="1" || m==="open");
+          }
+          aplica(d.id, on);
         }
       });
     });
 
     client.on("error", (err)=>{
       const s=(err&&err.message||"").toLowerCase();
-      if(s.includes("not authorized") || s.includes("bad user") || s.includes("password") || s.includes("4") || s.includes("5")){
+      if(s.includes("not authorized") || s.includes("bad user") || s.includes("password")
+         || s.includes("token") || s.includes("4") || s.includes("5")){
         clearTimeout(connectTimer);
         try{ client.end(true); }catch(e){}
-        localStorage.removeItem("mqtt_pass");
-        loginErr.textContent="Parola gresita.";
+        localStorage.removeItem("flespi_token");
+        loginErr.textContent="Token gresit.";
         loginEl.classList.add("show");
-        setStatus("bad","Parola gresita");
+        setStatus("bad","Token gresit");
       } else {
         setStatus("bad","Eroare retea");
       }
@@ -290,25 +315,25 @@
   loginBtn.addEventListener("click", ()=>{
     const p=passEl.value.trim(); if(!p) return;
     loginErr.textContent="";
-    localStorage.setItem("mqtt_pass", p);
+    localStorage.setItem("flespi_token", p);
     if(client){ try{ client.end(true); }catch(e){} client=null; }
     conecteaza(p);
   });
   passEl.addEventListener("keydown", e=>{ if(e.key==="Enter") loginBtn.click(); });
 
-  // apasare lunga pe bara de stare = sterge parola salvata (schimbare parola)
+  // apasare lunga pe bara de stare = sterge token-ul salvat (schimbare token)
   let pressTimer=null;
   statusEl.addEventListener("pointerdown", ()=>{ pressTimer=setTimeout(()=>{
-    localStorage.removeItem("mqtt_pass");
+    localStorage.removeItem("flespi_token");
     if(client){ try{ client.end(true); }catch(e){} client=null; }
-    passEl.value=""; loginErr.textContent="Parola stearsa. Introdu din nou.";
+    passEl.value=""; loginErr.textContent="Token sters. Lipeste din nou.";
     loginEl.classList.add("show");
   }, 1000); });
   statusEl.addEventListener("pointerup", ()=> clearTimeout(pressTimer));
   statusEl.addEventListener("pointerleave", ()=> clearTimeout(pressTimer));
 
-  // pornire: daca avem parola salvata, conecteaza; altfel cere-o
-  const saved = (function(){ try{ return localStorage.getItem("mqtt_pass"); }catch(e){ return null; } })();
+  // pornire: daca avem token salvat, conecteaza; altfel cere-l
+  const saved = (function(){ try{ return localStorage.getItem("flespi_token"); }catch(e){ return null; } })();
   if(saved) conecteaza(saved);
   else { loginEl.classList.add("show"); setStatus("bad","Neconectat"); }
 
