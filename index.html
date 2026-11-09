@@ -133,11 +133,16 @@
     { id:"poarta-mare", fx:0.825, fy:0.571 },
   ];
 
-  // Topicuri Shelly (Gen3, MQTT Control):
-  //   comanda -> <prefix>/command/switch:<ch>   payload "on"/"off" (sau "toggle")
-  //   stare   -> <prefix>/status/switch:<ch>    JSON cu { output: true/false }
+  // Topicuri Shelly (Gen3, MQTT Control + RPC):
+  //   comanda       -> <prefix>/command/switch:<ch>   payload "on"/"off" (sau "toggle")
+  //   stare (push)  -> <prefix>/status/switch:<ch>    JSON cu { output: true/false }
+  //   intrebare RPC -> <prefix>/rpc   { id, src, method:"Switch.GetStatus", params:{id:<ch>} }
+  //   raspuns RPC   -> <src>/rpc      JSON cu result.output
   const CMD = d => d.shelly + "/command/switch:" + (d.ch||0);
   const ST  = d => d.shelly + "/status/switch:"  + (d.ch||0);
+  const RPC = d => d.shelly + "/rpc";
+  // topic unde Shelly ne trimite raspunsul la RPC (unic pt app-ul asta)
+  const RPC_SRC = "app-" + Math.random().toString(16).slice(2,8);
 
   const GEAMURI = {
     stanga: [ { fx:0.021, fy:0.497, fw:0.072, fh:0.036 } ],
@@ -163,6 +168,8 @@
   const stare={}, geamEls={}, lampaEls={}, cerEls={}, poartaEls={}, pillEls={};
   const DEV={};  // lookup id -> dispozitiv
   [...LUMINI, ...PORTI].forEach(d=> DEV[d.id]=d);
+  // lookup rapid: pentru raspunsul RPC trebuie sa stim ce device e dupa (shelly, ch)
+  const DEV_BY_RPCID={};   // rpcId -> device (completat la trimiterea intrebarii)
 
   Object.keys(GEAMURI).forEach(g=>{ geamEls[g]=GEAMURI[g].map(()=>{ const el=document.createElement("div"); el.className="geam"; glows.appendChild(el); return el; }); });
   Object.keys(LAMPI).forEach(g=>{ lampaEls[g]=LAMPI[g].map(()=>{ const el=document.createElement("div"); el.className="lampa"; glows.appendChild(el); return el; }); });
@@ -204,6 +211,19 @@
       client.publish(CMD(d), payload);
     }
     // fara Shelly (lumini nelegate inca / porti) -> doar vizual, nu publica
+  }
+
+  // ---- cere starea curenta a tuturor Shelly-urilor (la conectare) ----
+  let rpcCounter = 0;
+  function cereStarea(){
+    if(!client || !client.connected) return;
+    [...LUMINI, ...PORTI].forEach(d=>{
+      if(!d.shelly) return;
+      const rpcId = ++rpcCounter;
+      DEV_BY_RPCID[rpcId] = d;
+      const req = { id: rpcId, src: RPC_SRC, method:"Switch.GetStatus", params:{ id:(d.ch||0) } };
+      client.publish(RPC(d), JSON.stringify(req));
+    });
   }
 
   // ---- pozitionare ancorata de imagine ----
@@ -271,11 +291,27 @@
       clearTimeout(connectTimer);
       setStatus("ok","Conectat");
       loginEl.classList.remove("show");
-      // asculta starea reala a luminilor legate la Shelly
+      // asculta starea reala push-uita de Shelly
       [...LUMINI, ...PORTI].forEach(d=>{ if(d.shelly) client.subscribe(ST(d)); });
+      // asculta raspunsul la intrebarile noastre de stare (RPC)
+      client.subscribe(RPC_SRC + "/rpc");
+      // intreaba imediat starea curenta, ca butonul sa fie corect din prima
+      cereStarea();
     });
 
     client.on("message", (topic, msg)=>{
+      // 1) raspuns la intrebarea noastra de stare (RPC)
+      if(topic === RPC_SRC + "/rpc"){
+        try {
+          const j = JSON.parse(msg.toString());
+          const d = DEV_BY_RPCID[j.id];
+          if(d && j.result && typeof j.result.output !== "undefined"){
+            aplica(d.id, j.result.output === true);
+          }
+        } catch(e){}
+        return;
+      }
+      // 2) stare push-uita de Shelly cand se schimba
       [...LUMINI, ...PORTI].forEach(d=>{
         if(d.shelly && topic === ST(d)){
           let on=false;
@@ -310,6 +346,11 @@
     client.on("close", ()=>{ if(statusEl.className!=="ok") setStatus("bad","Deconectat"); });
     client.on("offline", ()=> setStatus("bad","Offline"));
   }
+
+  // la revenire in app (din fundal) cere din nou starea, sa fie corecta
+  document.addEventListener("visibilitychange", ()=>{
+    if(!document.hidden && client && client.connected) cereStarea();
+  });
 
   // login
   loginBtn.addEventListener("click", ()=>{
